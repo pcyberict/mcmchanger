@@ -200,24 +200,25 @@ jobs:
       - name: Establish Tailscale Connection
         shell: pwsh
         env:
-          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
         run: |
           $ErrorActionPreference = "Stop"
 
           $tailscaleExe = "$env:ProgramFiles\Tailscale\tailscale.exe"
 
-          if ([string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTHKEY)) {
-              throw "TAILSCALE_AUTHKEY GitHub Secret is missing."
+          if ([string]::IsNullOrWhiteSpace($env:TS_OAUTH_SECRET)) {
+              throw "TS_OAUTH_SECRET GitHub Secret is missing."
           }
 
           if (-not (Test-Path $tailscaleExe)) {
               throw "Tailscale executable not found."
           }
 
-          Write-Host "Starting Tailscale authentication..."
+          Write-Host "Starting Tailscale OAuth authentication..."
 
           & $tailscaleExe up `
-            "--auth-key=$env:TAILSCALE_AUTHKEY" `
+            "--auth-key=$env:TS_OAUTH_SECRET" `
+            "--advertise-tags=tag:ci" `
             "--hostname=gh-runner-$env:GITHUB_RUN_ID"
 
           if ($LASTEXITCODE -ne 0) {
