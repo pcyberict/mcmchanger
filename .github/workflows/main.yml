@@ -14,7 +14,7 @@ jobs:
 
     env:
       RDP_USERNAME: RDP
-      RDP_PASSWORD: "REPLACE_WITH_YOUR_RDP_PASSWORD"
+      RDP_PASSWORD: "MR.English2008"
       RDP_PROFILE: 'C:\Users\RDP.runnervmquqza'
       RDP_DESKTOP: 'C:\Users\RDP.runnervmquqza\Desktop'
       RDP_DOWNLOADS: 'C:\Users\RDP.runnervmquqza\Downloads'
@@ -69,23 +69,56 @@ jobs:
           Write-Host "Remote Desktop enabled."
 
       # ==========================================
-      # 2. DISABLE LOCAL ACCOUNT LOCKOUT THRESHOLD
-      # Threshold 0 disables automatic local account lockout.
+      # 2. CONFIGURE LOCAL PASSWORD AND LOCKOUT POLICY
+      # Preserve the requested RDP password.
       # ==========================================
 
-      - name: Disable Local Account Lockout Threshold
+      - name: Configure Local Password Policy
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          Write-Host "Setting local account lockout threshold to 0..."
-          & net.exe accounts /lockoutthreshold:0
+          Write-Host "Configuring local Windows password policy..."
 
+          $policyPath = Join-Path $env:TEMP "pcyber-local-security.inf"
+          $databasePath = Join-Path $env:TEMP "pcyber-local-security.sdb"
+
+          $policy = @'
+          [Unicode]
+          Unicode=yes
+          [Version]
+          signature="$CHICAGO$"
+          Revision=1
+          [System Access]
+          MinimumPasswordAge = 0
+          MaximumPasswordAge = 0
+          MinimumPasswordLength = 14
+          PasswordComplexity = 1
+          PasswordHistorySize = 0
+          LockoutBadCount = 0
+          ResetLockoutCount = 0
+          LockoutDuration = 0
+          '@
+
+          # Remove heredoc indentation while preserving valid INF syntax.
+          $policy = ($policy -split "`r?`n" | ForEach-Object { $_.Trim() }) -join "`r`n"
+          Set-Content -Path $policyPath -Value $policy -Encoding Unicode
+
+          secedit.exe /configure /db $databasePath /cfg $policyPath /areas SECURITYPOLICY /quiet
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to apply the local password policy using secedit."
+          }
+
+          # Explicitly disable local account lockout as requested.
+          net.exe accounts /lockoutthreshold:0
           if ($LASTEXITCODE -ne 0) {
               throw "Failed to disable the local account lockout threshold."
           }
 
-          Write-Host "Local account lockout threshold is disabled."
+          Write-Host "Local password policy configured."
+          Write-Host "Minimum password length: 14"
+          Write-Host "Password complexity: enabled"
+          Write-Host "Local account lockout threshold: disabled"
 
       # ==========================================
       # 3. CREATE RDP USER AND ASSIGN ADMIN RIGHTS
@@ -213,46 +246,36 @@ jobs:
 
       # ==========================================
       # 5. ESTABLISH TAILSCALE CONNECTION
-      # AUTOMATIC OAUTH AUTHENTICATION
-      # NO MANUAL LOGIN OR APPROVAL LINK
+      # ORIGINAL AUTHKEY METHOD
       # ==========================================
 
-      - name: Establish Tailscale Connection Using OAuth
+      - name: Establish Tailscale Connection
         shell: pwsh
         env:
-          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
           $ErrorActionPreference = "Stop"
 
           $tailscaleExe = "$env:ProgramFiles\Tailscale\tailscale.exe"
 
-          if ([string]::IsNullOrWhiteSpace($env:TS_OAUTH_SECRET)) {
-              throw "TS_OAUTH_SECRET GitHub Secret is missing."
+          if ([string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTHKEY)) {
+              throw "TAILSCALE_AUTHKEY GitHub Secret is missing."
           }
 
           if (-not (Test-Path $tailscaleExe)) {
               throw "Tailscale executable not found."
           }
 
-          Write-Host "Starting automatic Tailscale OAuth authentication..."
-
-          # The OAuth client must have auth_keys write permission
-          # and must be allowed to use tag:ci in the tailnet.
-          # The OAuth client secret is accepted directly as an auth key.
-          $oauthAuth = "$($env:TS_OAUTH_SECRET)?ephemeral=true&preauthorized=true"
+          Write-Host "Starting Tailscale authentication..."
 
           & $tailscaleExe up `
-              "--auth-key=$oauthAuth" `
-              "--advertise-tags=tag:ci" `
-              "--hostname=gh-runner-$env:GITHUB_RUN_ID"
+            "--auth-key=$env:TAILSCALE_AUTHKEY" `
+            "--hostname=gh-runner-$env:GITHUB_RUN_ID"
 
           if ($LASTEXITCODE -ne 0) {
-              throw "Tailscale OAuth authentication failed. Verify auth_keys write permission and tag:ci authorization."
+              throw "Tailscale connection failed."
           }
 
-          Write-Host "Tailscale OAuth authentication successful."
-
-          # Retrieve assigned Tailscale IPv4 address
           $tsIP = $null
           $retries = 0
 
@@ -268,16 +291,14 @@ jobs:
           }
 
           if (-not $tsIP) {
-              throw "Tailscale IP was not assigned."
+              throw "Tailscale IP not assigned. Exiting."
           }
 
           "TAILSCALE_IP=$tsIP" | Out-File $env:GITHUB_ENV -Append
 
           Write-Host "========================================"
-          Write-Host "TAILSCALE AUTOMATICALLY CONNECTED"
+          Write-Host "TAILSCALE CONNECTED"
           Write-Host "Tailscale IP: $tsIP"
-          Write-Host "Authentication: OAuth client credential"
-          Write-Host "Manual approval: Not required"
           Write-Host "========================================"
 
       # ==========================================
