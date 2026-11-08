@@ -69,59 +69,7 @@ jobs:
           Write-Host "Remote Desktop enabled."
 
       # ==========================================
-      # 2. CONFIGURE LOCAL PASSWORD AND LOCKOUT POLICY
-      # Preserve the requested RDP password.
-      # ==========================================
-
-      - name: Configure Local Password Policy
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "Configuring local Windows password policy..."
-
-          $policyPath = Join-Path $env:TEMP "pcyber-local-security.inf"
-          $databasePath = Join-Path $env:TEMP "pcyber-local-security.sdb"
-
-          $policy = @'
-          [Unicode]
-          Unicode=yes
-          [Version]
-          signature="$CHICAGO$"
-          Revision=1
-          [System Access]
-          MinimumPasswordAge = 0
-          MaximumPasswordAge = 0
-          MinimumPasswordLength = 14
-          PasswordComplexity = 1
-          PasswordHistorySize = 0
-          LockoutBadCount = 0
-          ResetLockoutCount = 0
-          LockoutDuration = 0
-          '@
-
-          # Remove heredoc indentation while preserving valid INF syntax.
-          $policy = ($policy -split "`r?`n" | ForEach-Object { $_.Trim() }) -join "`r`n"
-          Set-Content -Path $policyPath -Value $policy -Encoding Unicode
-
-          secedit.exe /configure /db $databasePath /cfg $policyPath /areas SECURITYPOLICY /quiet
-          if ($LASTEXITCODE -ne 0) {
-              throw "Failed to apply the local password policy using secedit."
-          }
-
-          # Explicitly disable local account lockout as requested.
-          net.exe accounts /lockoutthreshold:0
-          if ($LASTEXITCODE -ne 0) {
-              throw "Failed to disable the local account lockout threshold."
-          }
-
-          Write-Host "Local password policy configured."
-          Write-Host "Minimum password length: 14"
-          Write-Host "Password complexity: enabled"
-          Write-Host "Local account lockout threshold: disabled"
-
-      # ==========================================
-      # 3. CREATE RDP USER AND ASSIGN ADMIN RIGHTS
+      # 2. CREATE RDP USER AND ASSIGN ADMIN RIGHTS
       # ==========================================
 
       - name: Create RDP Administrator User
@@ -217,7 +165,7 @@ jobs:
           Write-Host "========================================"
 
       # ==========================================
-      # 4. INSTALL TAILSCALE
+      # 2. INSTALL TAILSCALE
       # ==========================================
 
       - name: Install Tailscale
@@ -245,7 +193,7 @@ jobs:
           Write-Host "Tailscale installed successfully."
 
       # ==========================================
-      # 5. ESTABLISH TAILSCALE CONNECTION
+      # 2. ESTABLISH TAILSCALE CONNECTION
       # ORIGINAL AUTHKEY METHOD
       # ==========================================
 
@@ -302,7 +250,7 @@ jobs:
           Write-Host "========================================"
 
       # ==========================================
-      # 6. PREPARE DESKTOP AND DOWNLOAD DIRECTORIES
+      # 2. PREPARE DESKTOP AND DOWNLOAD DIRECTORIES
       # ==========================================
 
       - name: Prepare Desktop
@@ -323,7 +271,7 @@ jobs:
           Write-Host "Desktop: $env:RDP_DESKTOP"
 
       # ==========================================
-      # 7. DOWNLOAD PBOT APPLICATION
+      # 2. DOWNLOAD PBOT APPLICATION
       # ==========================================
 
       - name: Download PBOT Application
@@ -351,7 +299,7 @@ jobs:
           Write-Host "PBOT downloaded and verified."
 
       # ==========================================
-      # 8. DOWNLOAD MAC CHANGER
+      # 2. DOWNLOAD MAC CHANGER
       # ==========================================
 
       - name: Download MAC Changer
@@ -385,7 +333,7 @@ jobs:
           Write-Host "MAC Changer downloaded successfully."
 
       # ==========================================
-      # 9. DOWNLOAD AND EXTRACT PCYBER TWIST
+      # 2. DOWNLOAD AND EXTRACT PCYBER TWIST
       # UPDATED FILENAME
       # ==========================================
 
@@ -442,7 +390,7 @@ jobs:
           Write-Host "Location: $destination"
 
       # ==========================================
-      # 10. DOWNLOAD AND EXTRACT CRX BUILD
+      # 2. DOWNLOAD AND EXTRACT CRX BUILD
       # ==========================================
 
       - name: Download and Extract CRX Build
@@ -498,7 +446,7 @@ jobs:
           Write-Host "Location: $destination"
 
       # ==========================================
-      # 11. DOWNLOAD AND RUN DOWNLOADS.BAT
+      # 2. DOWNLOAD AND RUN DOWNLOADS.BAT
       # ==========================================
 
       - name: Download and Run Downloads BAT
@@ -610,7 +558,7 @@ jobs:
           Write-Host "Downloads processing completed."
 
       # ==========================================
-      # 12. VERIFY RDP ADMINISTRATOR AND CONNECTION
+      # 2. VERIFY RDP ADMINISTRATOR AND CONNECTION
       # ==========================================
 
       - name: Verify RDP Accessibility and Permissions
@@ -671,7 +619,7 @@ jobs:
               Format-Table -AutoSize
 
       # ==========================================
-      # 13. DISPLAY CONNECTION AND KEEP RUNNER ALIVE
+      # 2. DISPLAY CONNECTION AND KEEP RUNNER ALIVE
       # ==========================================
 
       - name: Maintain RDP Connection
