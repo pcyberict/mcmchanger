@@ -1,628 +1,96 @@
 
-name: Windows 11 + Tailscale + PCYBER PBOT
-
-on:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-jobs:
-  secure-rdp:
-    runs-on: windows-2022
-    timeout-minutes: 360
-
-    env:
-      RDP_USERNAME: RDP
-      RDP_PASSWORD: "MR.English2008"
-      RDP_PROFILE: 'C:\Users\RDP.runnervmquqza'
-      RDP_DESKTOP: 'C:\Users\RDP.runnervmquqza\Desktop'
-      RDP_DOWNLOADS: 'C:\PCYBER\Downloads'
-      PCYBER_DIR: 'C:\PCYBER'
-
-    steps:
-
-      # ==========================================
-      # 1. CONFIGURE CORE RDP SETTINGS
-      # ==========================================
-
-      - name: Configure Core RDP Settings
+      - name: Download and Install PCYBER PBOT
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          Set-ItemProperty `
-            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-            -Name "fDenyTSConnections" -Value 0 -Force
+          $InstallDir = "C:\PCYBER"
+          $ApiUrl = "https://api.github.com/repos/pcyberict/pcyber-tech/releases/tags/v1.0"
 
-          $rdpTcp = 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+          New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 
-          Set-ItemProperty -Path $rdpTcp `
-            -Name "UserAuthentication" -Value 1 -Force
+          Write-Host "Retrieving PCYBER TECH v1.0 release assets..."
 
-          Set-ItemProperty -Path $rdpTcp `
-            -Name "SecurityLayer" -Value 2 -Force
+          $Headers = @{
+              "Accept" = "application/vnd.github+json"
+              "User-Agent" = "PCYBER-RDP-Installer"
+          }
 
-          Get-NetFirewallRule -DisplayName "PCYBER-RDP-Tailscale" `
-            -ErrorAction SilentlyContinue |
-            Remove-NetFirewallRule
+          $Release = Invoke-RestMethod -Uri $ApiUrl -Headers $Headers
 
-          Get-NetFirewallRule -DisplayGroup "Remote Desktop" `
-            -ErrorAction SilentlyContinue |
-            Disable-NetFirewallRule
+          $Assets = @($Release.assets | Where-Object {
+              $_.name -match '\.(exe|zip)$'
+          })
 
-          New-NetFirewallRule `
-            -DisplayName "PCYBER-RDP-Tailscale" `
-            -Direction Inbound `
-            -Protocol TCP `
-            -LocalPort 3389 `
-            -RemoteAddress "100.64.0.0/10" `
-            -Action Allow `
-            -Profile Any
+          if ($Assets.Count -eq 0) {
+              throw "No executable or ZIP installer was found in release v1.0."
+          }
 
-          Set-Service -Name TermService -StartupType Automatic
+          # Prefer an asset whose filename identifies it as PBOT or Bot.
+          $Preferred = @($Assets | Where-Object {
+              $_.name -match '(?i)pbot|bot'
+          })
 
-          Restart-Service -Name TermService -Force
-
-          Write-Host "Remote Desktop enabled."
-
-      # ==========================================
-      # 2. CREATE RDP USER AND ASSIGN ADMIN RIGHTS
-      # ==========================================
-
-      - name: Create RDP Administrator User
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $username = $env:RDP_USERNAME
-
-          $securePass = ConvertTo-SecureString `
-            $env:RDP_PASSWORD -AsPlainText -Force
-
-          Write-Host "Configuring RDP account..."
-
-          $existingUser = Get-LocalUser `
-            -Name $username -ErrorAction SilentlyContinue
-
-          if (-not $existingUser) {
-
-            New-LocalUser `
-              -Name $username `
-              -Password $securePass `
-              -FullName "PCYBER RDP Administrator" `
-              -Description "PCYBER Remote Desktop Account" `
-              -AccountNeverExpires `
-              -PasswordNeverExpires
-
+          if ($Preferred.Count -eq 1) {
+              $Asset = $Preferred[0]
+          }
+          elseif ($Assets.Count -eq 1) {
+              $Asset = $Assets[0]
           }
           else {
-
-            Set-LocalUser -Name $username -Password $securePass
-
-            Enable-LocalUser -Name $username
-
+              Write-Host "Available release assets:"
+              $Assets | ForEach-Object { Write-Host $_.name }
+              throw "Multiple possible application assets found. Please identify the PBOT asset."
           }
 
-          $user = Get-LocalUser -Name $username
-          $sid = $user.SID.Value
+          $DownloadPath = Join-Path $env:RUNNER_TEMP $Asset.name
 
-          # Administrators group
-
-          $adminGroup = Get-LocalGroup -SID "S-1-5-32-544"
-
-          $adminMember = Get-LocalGroupMember `
-            -Group $adminGroup.Name `
-            -ErrorAction SilentlyContinue |
-            Where-Object { $_.SID.Value -eq $sid }
-
-          if (-not $adminMember) {
-
-            Add-LocalGroupMember `
-              -Group $adminGroup.Name `
-              -Member $username
-
-          }
-
-          # Remote Desktop Users group
-
-          $rdpGroup = Get-LocalGroup -SID "S-1-5-32-555"
-
-          $rdpMember = Get-LocalGroupMember `
-            -Group $rdpGroup.Name `
-            -ErrorAction SilentlyContinue |
-            Where-Object { $_.SID.Value -eq $sid }
-
-          if (-not $rdpMember) {
-
-            Add-LocalGroupMember `
-              -Group $rdpGroup.Name `
-              -Member $username
-
-          }
-
-          # Configure requested profile path
-
-          $profileKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
-
-          New-Item -Path $profileKey -Force | Out-Null
-
-          Set-ItemProperty `
-            -Path $profileKey `
-            -Name "ProfileImagePath" `
-            -Value $env:RDP_PROFILE `
-            -Force
-
-          # Prepare directories
-
-          @(
-            $env:RDP_PROFILE,
-            $env:RDP_DESKTOP,
-            $env:RDP_DOWNLOADS,
-            $env:PCYBER_DIR
-          ) | ForEach-Object {
-
-            New-Item -ItemType Directory `
-              -Path $_ -Force | Out-Null
-
-          }
-
-          # Grant permissions
-
-          icacls $env:RDP_PROFILE /grant `
-            ("*{0}:(OI)(CI)F" -f $sid) /T /C
-
-          icacls $env:PCYBER_DIR /grant `
-            ("*{0}:(OI)(CI)F" -f $sid) /T /C
-
-          # Verify administrator membership
-
-          $adminMember = Get-LocalGroupMember `
-            -Group $adminGroup.Name |
-            Where-Object { $_.SID.Value -eq $sid }
-
-          $rdpMember = Get-LocalGroupMember `
-            -Group $rdpGroup.Name |
-            Where-Object { $_.SID.Value -eq $sid }
-
-          if (-not $adminMember) {
-            throw "RDP user was not added to Administrators."
-          }
-
-          if (-not $rdpMember) {
-            throw "RDP user was not added to Remote Desktop Users."
-          }
-
-          Write-Host "========================================"
-          Write-Host "RDP USER CONFIGURED"
-          Write-Host "Username: $username"
-          Write-Host "Administrator: YES"
-          Write-Host "Remote Desktop Users: YES"
-          Write-Host "Desktop: $env:RDP_DESKTOP"
-          Write-Host "========================================"
-
-      # ==========================================
-      # 3. INSTALL TAILSCALE
-      # ==========================================
-
-      - name: Install Tailscale
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-
-          $installerPath = "$env:TEMP\tailscale.msi"
+          Write-Host "Downloading: $($Asset.name)"
 
           Invoke-WebRequest `
-            -Uri $tsUrl `
-            -OutFile $installerPath
+              -Uri $Asset.browser_download_url `
+              -Headers $Headers `
+              -OutFile $DownloadPath
 
-          $install = Start-Process msiexec.exe `
-            -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" `
-            -Wait -PassThru
-
-          Remove-Item $installerPath -Force `
-            -ErrorAction SilentlyContinue
-
-          if ($install.ExitCode -notin @(0, 3010)) {
-            throw "Tailscale installation failed: $($install.ExitCode)"
+          if (!(Test-Path $DownloadPath) -or (Get-Item $DownloadPath).Length -lt 1024) {
+              throw "Download failed or the downloaded file is invalid."
           }
 
-          $tailscaleExe = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          if ($Asset.name -match '\.zip$') {
+              $ExtractDir = Join-Path $env:RUNNER_TEMP "PCYBER_PBOT_EXTRACT"
 
-          if (-not (Test-Path $tailscaleExe)) {
-            throw "Tailscale installation failed."
+              Remove-Item $ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
+              New-Item -ItemType Directory -Path $ExtractDir -Force | Out-Null
+
+              Expand-Archive -Path $DownloadPath -DestinationPath $ExtractDir -Force
+
+              $Executables = @(Get-ChildItem $ExtractDir -Filter "*.exe" -Recurse)
+
+              $PreferredExe = @($Executables | Where-Object {
+                  $_.Name -match '(?i)pbot|bot'
+              })
+
+              if ($PreferredExe.Count -eq 1) {
+                  $BotExe = $PreferredExe[0]
+              }
+              elseif ($Executables.Count -eq 1) {
+                  $BotExe = $Executables[0]
+              }
+              else {
+                  throw "Could not uniquely identify the PBOT executable inside the release ZIP."
+              }
+
+              Copy-Item $BotExe.FullName (Join-Path $InstallDir "pbot.exe") -Force
+          }
+          else {
+              Copy-Item $DownloadPath (Join-Path $InstallDir "pbot.exe") -Force
           }
 
-          Write-Host "Tailscale installed successfully."
+          $FinalExe = Join-Path $InstallDir "pbot.exe"
 
-      # ==========================================
-      # 4. ESTABLISH TAILSCALE CONNECTION
-      # ORIGINAL OAUTH AUTHENTICATION
-      # ==========================================
-
-      - name: Establish Tailscale Connection
-        shell: pwsh
-        env:
-          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $tailscaleExe = "$env:ProgramFiles\Tailscale\tailscale.exe"
-
-          if ([string]::IsNullOrWhiteSpace($env:TS_OAUTH_SECRET)) {
-            throw "TS_OAUTH_SECRET GitHub Secret is missing."
+          if (!(Test-Path $FinalExe)) {
+              throw "PCYBER PBOT installation failed."
           }
 
-          if (-not (Test-Path $tailscaleExe)) {
-            throw "Tailscale executable not found."
-          }
-
-          Write-Host "Starting Tailscale OAuth authentication..."
-
-          & $tailscaleExe up `
-            "--auth-key=$env:TS_OAUTH_SECRET" `
-            "--advertise-tags=tag:ci" `
-            "--hostname=gh-runner-$env:GITHUB_RUN_ID"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Tailscale connection failed."
-          }
-
-          $tsIP = $null
-          $retries = 0
-
-          while (-not $tsIP -and $retries -lt 15) {
-
-            $tsIP = & $tailscaleExe ip -4 |
-              Select-Object -First 1
-
-            if (-not $tsIP) {
-              Start-Sleep -Seconds 5
-            }
-
-            $retries++
-
-          }
-
-          if (-not $tsIP) {
-            throw "Tailscale IP not assigned. Exiting."
-          }
-
-          "TAILSCALE_IP=$tsIP" |
-            Out-File $env:GITHUB_ENV -Append
-
-          Write-Host "========================================"
-          Write-Host "TAILSCALE CONNECTED"
-          Write-Host "Tailscale IP: $tsIP"
-          Write-Host "========================================"
-
-      # ==========================================
-      # 5. PREPARE PCYBER DIRECTORIES
-      # ==========================================
-
-      - name: Prepare PCYBER Directories
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          @(
-            $env:PCYBER_DIR,
-            $env:RDP_DOWNLOADS,
-            $env:RDP_DESKTOP
-          ) | ForEach-Object {
-
-            New-Item -ItemType Directory `
-              -Path $_ -Force | Out-Null
-
-          }
-
-          Write-Host "PCYBER directories prepared."
-          Write-Host "Software directory: $env:PCYBER_DIR"
-          Write-Host "Downloads directory: $env:RDP_DOWNLOADS"
-          Write-Host "Desktop: $env:RDP_DESKTOP"
-
-      # ==========================================
-      # 6. DOWNLOAD PCYBER PBOT ONLY
-      # ==========================================
-
-      - name: Download PCYBER PBOT
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          # PBOT release asset
-          $url = "https://github.com/pcyberict/pcyber-tech/releases/download/v1.0/pbot.exe"
-
-          $destination = Join-Path $env:PCYBER_DIR "pbot.exe"
-
-          $tempFile = Join-Path $env:TEMP "pbot-download.exe"
-
-          Write-Host "Downloading PCYBER PBOT..."
-
-          Invoke-WebRequest `
-            -Uri $url `
-            -OutFile $tempFile
-
-          if (-not (Test-Path $tempFile)) {
-            throw "PBOT download failed."
-          }
-
-          # Verify executable size
-
-          $fileInfo = Get-Item $tempFile
-
-          if ($fileInfo.Length -lt 1024) {
-            throw "PBOT file is invalid or incomplete."
-          }
-
-          # Verify Windows executable header
-
-          $stream = [System.IO.File]::OpenRead($tempFile)
-
-          try {
-
-            $header = New-Object byte[] 2
-
-            [void]$stream.Read($header, 0, 2)
-
-          }
-          finally {
-
-            $stream.Dispose()
-
-          }
-
-          if ($header[0] -ne 0x4D -or $header[1] -ne 0x5A) {
-            throw "PBOT is not a valid Windows executable."
-          }
-
-          Move-Item `
-            -Path $tempFile `
-            -Destination $destination `
-            -Force
-
-          Write-Host "========================================"
-          Write-Host "PCYBER PBOT DOWNLOADED"
-          Write-Host "Location: $destination"
-          Write-Host "Size: $((Get-Item $destination).Length) bytes"
-          Write-Host "========================================"
-
-      # ==========================================
-      # 7. CREATE PBOT DESKTOP SHORTCUT
-      # ==========================================
-
-      - name: Create PBOT Desktop Shortcut
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $pbotPath = Join-Path $env:PCYBER_DIR "pbot.exe"
-
-          if (-not (Test-Path $pbotPath)) {
-            throw "PBOT executable is missing."
-          }
-
-          New-Item -ItemType Directory `
-            -Path $env:RDP_DESKTOP -Force | Out-Null
-
-          $shell = New-Object -ComObject WScript.Shell
-
-          $shortcutPath = Join-Path `
-            $env:RDP_DESKTOP "PCYBER PBOT.lnk"
-
-          $shortcut = $shell.CreateShortcut($shortcutPath)
-
-          $shortcut.TargetPath = $pbotPath
-
-          $shortcut.WorkingDirectory = $env:PCYBER_DIR
-
-          $shortcut.Description = "PCYBER PBOT Application"
-
-          $shortcut.Save()
-
-          Write-Host "PCYBER PBOT desktop shortcut created."
-
-      # ==========================================
-      # 8. DOWNLOAD AND CONFIGURE DOWNLOADS.BAT
-      # ==========================================
-
-      - name: Download and Run Downloads BAT
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $downloadUrl = "https://gitlab.com/MR.English2008/pcme_rdp/-/raw/main/Downloads.bat"
-
-          $batPath = Join-Path $env:RDP_DOWNLOADS "Downloads.bat"
-
-          Invoke-WebRequest `
-            -Uri $downloadUrl `
-            -OutFile $batPath
-
-          if (-not (Test-Path $batPath)) {
-            throw "Downloads.bat download failed."
-          }
-
-          if ((Get-Item $batPath).Length -lt 10) {
-            throw "Downloads.bat is empty or invalid."
-          }
-
-          # Configure RDP Startup folder
-
-          $startupPath = Join-Path $env:RDP_PROFILE `
-            "AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
-
-          New-Item -ItemType Directory `
-            -Path $startupPath -Force | Out-Null
-
-          # Create Startup shortcut
-
-          $shell = New-Object -ComObject WScript.Shell
-
-          $startupShortcut = Join-Path `
-            $startupPath "PCYBER Downloads.lnk"
-
-          $shortcut = $shell.CreateShortcut($startupShortcut)
-
-          $shortcut.TargetPath = "$env:SystemRoot\System32\cmd.exe"
-
-          $shortcut.Arguments = "/c `"`"$batPath`"`""
-
-          $shortcut.WorkingDirectory = $env:RDP_DOWNLOADS
-
-          $shortcut.Description = "PCYBER Downloads Startup"
-
-          $shortcut.Save()
-
-          Write-Host "Downloads.bat Startup shortcut created."
-
-          # Execute Downloads.bat
-
-          Write-Host "Running Downloads.bat..."
-
-          $process = Start-Process `
-            -FilePath "cmd.exe" `
-            -ArgumentList "/c `"`"$batPath`"`"" `
-            -WorkingDirectory $env:RDP_DOWNLOADS `
-            -Wait `
-            -PassThru `
-            -NoNewWindow
-
-          Write-Host "Downloads.bat exit code: $($process.ExitCode)"
-
-          if ($process.ExitCode -ne 0) {
-            throw "Downloads.bat execution failed."
-          }
-
-          Write-Host "Downloads.bat execution completed."
-
-      # ==========================================
-      # 9. VERIFY ADMINISTRATOR AND RDP ACCESS
-      # ==========================================
-
-      - name: Verify RDP Accessibility and Permissions
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $user = Get-LocalUser -Name $env:RDP_USERNAME
-
-          if (-not $user.Enabled) {
-            throw "RDP account is disabled."
-          }
-
-          $sid = $user.SID.Value
-
-          $adminGroup = Get-LocalGroup -SID "S-1-5-32-544"
-
-          $rdpGroup = Get-LocalGroup -SID "S-1-5-32-555"
-
-          $adminMember = Get-LocalGroupMember `
-            -Group $adminGroup.Name |
-            Where-Object { $_.SID.Value -eq $sid }
-
-          $rdpMember = Get-LocalGroupMember `
-            -Group $rdpGroup.Name |
-            Where-Object { $_.SID.Value -eq $sid }
-
-          if (-not $adminMember) {
-            throw "RDP user is not an Administrator."
-          }
-
-          if (-not $rdpMember) {
-            throw "RDP user is not in Remote Desktop Users."
-          }
-
-          # Verify PBOT
-
-          $pbotPath = Join-Path $env:PCYBER_DIR "pbot.exe"
-
-          if (-not (Test-Path $pbotPath)) {
-            throw "PBOT executable was not found."
-          }
-
-          # Verify desktop shortcut
-
-          $shortcutPath = Join-Path `
-            $env:RDP_DESKTOP "PCYBER PBOT.lnk"
-
-          if (-not (Test-Path $shortcutPath)) {
-            throw "PBOT desktop shortcut was not found."
-          }
-
-          # Verify Downloads.bat
-
-          $batPath = Join-Path $env:RDP_DOWNLOADS "Downloads.bat"
-
-          if (-not (Test-Path $batPath)) {
-            throw "Downloads.bat is missing."
-          }
-
-          Write-Host "========================================"
-          Write-Host "PCYBER RDP VERIFICATION"
-          Write-Host "========================================"
-          Write-Host "Administrator: VERIFIED"
-          Write-Host "Remote Desktop Users: VERIFIED"
-          Write-Host "PBOT: VERIFIED"
-          Write-Host "Desktop Shortcut: VERIFIED"
-          Write-Host "Downloads.bat: VERIFIED"
-
-          Write-Host ""
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          Write-Host "RDP Port: 3389"
-          Write-Host "Username: $env:RDP_USERNAME"
-          Write-Host "PBOT: $pbotPath"
-
-          $testResult = Test-NetConnection `
-            -ComputerName "127.0.0.1" `
-            -Port 3389 `
-            -WarningAction SilentlyContinue
-
-          if (-not $testResult.TcpTestSucceeded) {
-            throw "RDP service is not responding on port 3389."
-          }
-
-          Write-Host ""
-          Write-Host "RDP TCP PORT: VERIFIED"
-
-          Write-Host ""
-          Write-Host "PCYBER DIRECTORY CONTENTS:"
-
-          Get-ChildItem -Path $env:PCYBER_DIR -Force |
-            Select-Object Name, Length |
-            Format-Table -AutoSize
-
-      # ==========================================
-      # 10. DISPLAY CONNECTION AND KEEP RUNNER ALIVE
-      # ==========================================
-
-      - name: Maintain RDP Connection
-        shell: pwsh
-        run: |
-          Write-Host ""
-          Write-Host "======================================"
-          Write-Host "          PCYBER RDP ACCESS"
-          Write-Host "======================================"
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Port: 3389"
-          Write-Host "Username: $env:RDP_USERNAME"
-          Write-Host "Password: [configured in workflow]"
-          Write-Host "Administrator: YES"
-          Write-Host "======================================"
-
-          Write-Host ""
-          Write-Host "APPLICATION:"
-          Write-Host "PCYBER PBOT"
-          Write-Host "Location: $env:PCYBER_DIR\pbot.exe"
-
-          while ($true) {
-
-            Write-Host "[$(Get-Date)] PCYBER RDP Active."
-
-            Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-
-            Start-Sleep -Seconds 300
-
-          }
+          Write-Host "PCYBER PBOT installed successfully."
+          Write-Host "Location: $FinalExe"
