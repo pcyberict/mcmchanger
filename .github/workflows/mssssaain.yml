@@ -271,36 +271,10 @@ jobs:
           Write-Host "RDP Desktop prepared."
           Write-Host "Desktop: $env:RDP_DESKTOP"
 
-      # ==========================================
-      # 2. DOWNLOAD PBOT APPLICATION
-      # ==========================================
-
-      - name: Download PBOT Application
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $url = "https://github.com/pcyberict/pcyber-tech/releases/tag/v1.0"
-          $destination = Join-Path $env:RDP_DESKTOP "pbot.exe"
-
-          Invoke-WebRequest -Uri $url -OutFile $destination
-
-          if (-not (Test-Path $destination)) {
-              throw "PBOT download failed."
-          }
-
-          $actualHash = (Get-FileHash -Path $destination -Algorithm SHA256).Hash.ToLower()
-
-          $expectedHash = "32b69e5102b90d77d521cdd8404511ad1dc031a77c450cf5c80811bc0164cee8"
-
-          if ($actualHash -ne $expectedHash) {
-              throw "PBOT SHA256 verification failed."
-          }
-
-          Write-Host "PBOT downloaded and verified."
+    
 
       # ==========================================
-      # 2. DOWNLOAD MAC CHANGER
+      # 2. DOWNLOAD PBOT
       # ==========================================
 
       - name: Download MAC Changer
@@ -308,8 +282,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $url = "https://github.com/pcyberict/mcmchanger/releases/download/v1.0/mac_changer.exe"
-          $destination = Join-Path $env:RDP_DESKTOP "mac_changer.exe"
+          $url = "https://github.com/pcyberict/pcyber-tech/releases/tag/v1.0"
+          $destination = Join-Path $env:RDP_DESKTOP "PCYBER-TECH.exe"
 
           Invoke-WebRequest -Uri $url -OutFile $destination
 
