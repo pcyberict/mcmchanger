@@ -1,0 +1,96 @@
+
+      - name: Download and Install PCYBER PBOT
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $InstallDir = "C:\PCYBER"
+          $ApiUrl = "https://api.github.com/repos/pcyberict/pcyber-tech/releases/tags/v1.0"
+
+          New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+
+          Write-Host "Retrieving PCYBER TECH v1.0 release assets..."
+
+          $Headers = @{
+              "Accept" = "application/vnd.github+json"
+              "User-Agent" = "PCYBER-RDP-Installer"
+          }
+
+          $Release = Invoke-RestMethod -Uri $ApiUrl -Headers $Headers
+
+          $Assets = @($Release.assets | Where-Object {
+              $_.name -match '\.(exe|zip)$'
+          })
+
+          if ($Assets.Count -eq 0) {
+              throw "No executable or ZIP installer was found in release v1.0."
+          }
+
+          # Prefer an asset whose filename identifies it as PBOT or Bot.
+          $Preferred = @($Assets | Where-Object {
+              $_.name -match '(?i)pbot|bot'
+          })
+
+          if ($Preferred.Count -eq 1) {
+              $Asset = $Preferred[0]
+          }
+          elseif ($Assets.Count -eq 1) {
+              $Asset = $Assets[0]
+          }
+          else {
+              Write-Host "Available release assets:"
+              $Assets | ForEach-Object { Write-Host $_.name }
+              throw "Multiple possible application assets found. Please identify the PBOT asset."
+          }
+
+          $DownloadPath = Join-Path $env:RUNNER_TEMP $Asset.name
+
+          Write-Host "Downloading: $($Asset.name)"
+
+          Invoke-WebRequest `
+              -Uri $Asset.browser_download_url `
+              -Headers $Headers `
+              -OutFile $DownloadPath
+
+          if (!(Test-Path $DownloadPath) -or (Get-Item $DownloadPath).Length -lt 1024) {
+              throw "Download failed or the downloaded file is invalid."
+          }
+
+          if ($Asset.name -match '\.zip$') {
+              $ExtractDir = Join-Path $env:RUNNER_TEMP "PCYBER_PBOT_EXTRACT"
+
+              Remove-Item $ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
+              New-Item -ItemType Directory -Path $ExtractDir -Force | Out-Null
+
+              Expand-Archive -Path $DownloadPath -DestinationPath $ExtractDir -Force
+
+              $Executables = @(Get-ChildItem $ExtractDir -Filter "*.exe" -Recurse)
+
+              $PreferredExe = @($Executables | Where-Object {
+                  $_.Name -match '(?i)pbot|bot'
+              })
+
+              if ($PreferredExe.Count -eq 1) {
+                  $BotExe = $PreferredExe[0]
+              }
+              elseif ($Executables.Count -eq 1) {
+                  $BotExe = $Executables[0]
+              }
+              else {
+                  throw "Could not uniquely identify the PBOT executable inside the release ZIP."
+              }
+
+              Copy-Item $BotExe.FullName (Join-Path $InstallDir "pbot.exe") -Force
+          }
+          else {
+              Copy-Item $DownloadPath (Join-Path $InstallDir "pbot.exe") -Force
+          }
+
+          $FinalExe = Join-Path $InstallDir "pbot.exe"
+
+          if (!(Test-Path $FinalExe)) {
+              throw "PCYBER PBOT installation failed."
+          }
+
+          Write-Host "PCYBER PBOT installed successfully."
+          Write-Host "Location: $FinalExe"
