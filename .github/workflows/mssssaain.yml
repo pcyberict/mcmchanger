@@ -1,5 +1,5 @@
 
-name: Windows 11 + Tailscale + PCYBER Applications
+name: PCYBERTECH APP
 
 on:
   workflow_dispatch:
@@ -280,7 +280,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $url = "https://github.com/pcyberict/pcyber-rdp-apps/releases/download/v1.0/pbot.exe"
+          $url = "https://github.com/pcyberict/pcyber-tech/releases/tag/v1.0"
           $destination = Join-Path $env:RDP_DESKTOP "pbot.exe"
 
           Invoke-WebRequest -Uri $url -OutFile $destination
