@@ -340,6 +340,7 @@ jobs:
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           Write-Host "RDP Port: 3389"
           Write-Host "Username: $env:RDP_USERNAME"
+          Write-Host "Username: $env:RDP_PASSWORD"
           Write-Host "Desktop: $env:RDP_DESKTOP"
 
           $testResult = Test-NetConnection `
@@ -374,7 +375,7 @@ jobs:
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Port: 3389"
           Write-Host "Username: $env:RDP_USERNAME"
-          Write-Host "Password: [configured in workflow]"
+          Write-Host "Password: $env:RDP_PASSWORD"
           Write-Host "Administrator: YES"
           Write-Host "======================================"
 
