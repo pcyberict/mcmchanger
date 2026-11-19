@@ -165,7 +165,7 @@ jobs:
           Write-Host "========================================"
 
       # ==========================================
-      # 2. INSTALL TAILSCALE
+      # 3. INSTALL TAILSCALE
       # ==========================================
 
       - name: Install Tailscale
@@ -193,7 +193,7 @@ jobs:
           Write-Host "Tailscale installed successfully."
 
       # ==========================================
-      # 2. ESTABLISH TAILSCALE CONNECTION
+      # 4. ESTABLISH TAILSCALE CONNECTION
       # ORIGINAL AUTHKEY METHOD
       # ==========================================
 
@@ -251,7 +251,7 @@ jobs:
           Write-Host "========================================"
 
       # ==========================================
-      # 2. PREPARE DESKTOP AND DOWNLOAD DIRECTORIES
+      # 5. PREPARE DESKTOP AND DOWNLOAD DIRECTORIES
       # ==========================================
 
       - name: Prepare Desktop
@@ -272,7 +272,7 @@ jobs:
           Write-Host "Desktop: $env:RDP_DESKTOP"
 
       # ==========================================
-      # 2. DOWNLOAD PBOT APPLICATION
+      # 6. DOWNLOAD PBOT APPLICATION
       # ==========================================
 
       - name: Download PBOT Application
@@ -299,8 +299,81 @@ jobs:
 
           Write-Host "PBOT downloaded and verified."
 
-            # ==========================================
-      # 2. VERIFY RDP ADMINISTRATOR AND CONNECTION
+      # ==========================================
+      # 7. CREATE PCYBER DESKTOP SHORTCUT
+      # NEW ADDITION
+      # ==========================================
+
+      - name: Create PCYBER Desktop Shortcut
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $application = Join-Path $env:RDP_DESKTOP "pbot.exe"
+
+          if (-not (Test-Path $application)) {
+              throw "PBOT application not found. Cannot create desktop shortcut."
+          }
+
+          # Windows Public Desktop
+          # This desktop is shared with all Windows users.
+          $publicDesktop = Join-Path $env:PUBLIC "Desktop"
+
+          # Ensure both desktop folders exist
+          New-Item -ItemType Directory `
+            -Path $publicDesktop -Force | Out-Null
+
+          New-Item -ItemType Directory `
+            -Path $env:RDP_DESKTOP -Force | Out-Null
+
+          # Create shortcuts on both desktops
+          $desktopLocations = @(
+              $publicDesktop,
+              $env:RDP_DESKTOP
+          ) | Select-Object -Unique
+
+          $shell = New-Object -ComObject WScript.Shell
+
+          foreach ($desktop in $desktopLocations) {
+
+              $shortcutPath = Join-Path $desktop "PCYBER PBOT.lnk"
+
+              $shortcut = $shell.CreateShortcut($shortcutPath)
+
+              $shortcut.TargetPath = $application
+              $shortcut.WorkingDirectory = Split-Path $application
+              $shortcut.Description = "PCYBER PBOT Application"
+              $shortcut.IconLocation = "$application,0"
+
+              $shortcut.Save()
+
+              Write-Host "Desktop shortcut created:"
+              Write-Host $shortcutPath
+          }
+
+          # Verify Public Desktop shortcut
+          $publicShortcut = Join-Path $publicDesktop "PCYBER PBOT.lnk"
+
+          if (-not (Test-Path $publicShortcut)) {
+              throw "Public Desktop shortcut creation failed."
+          }
+
+          # Verify RDP Desktop shortcut
+          $userShortcut = Join-Path $env:RDP_DESKTOP "PCYBER PBOT.lnk"
+
+          if (-not (Test-Path $userShortcut)) {
+              throw "RDP Desktop shortcut creation failed."
+          }
+
+          Write-Host "========================================"
+          Write-Host "PCYBER DESKTOP SHORTCUTS VERIFIED"
+          Write-Host "Public Desktop: $publicShortcut"
+          Write-Host "RDP Desktop: $userShortcut"
+          Write-Host "Application: $application"
+          Write-Host "========================================"
+
+      # ==========================================
+      # 8. VERIFY RDP ADMINISTRATOR AND CONNECTION
       # ==========================================
 
       - name: Verify RDP Accessibility and Permissions
@@ -361,8 +434,15 @@ jobs:
               Select-Object Name, Length |
               Format-Table -AutoSize
 
+          Write-Host ""
+          Write-Host "Public Desktop contents:"
+
+          Get-ChildItem -Path (Join-Path $env:PUBLIC "Desktop") -Force |
+              Select-Object Name, Length |
+              Format-Table -AutoSize
+
       # ==========================================
-      # 2. DISPLAY CONNECTION AND KEEP RUNNER ALIVE
+      # 9. DISPLAY CONNECTION AND KEEP RUNNER ALIVE
       # ==========================================
 
       - name: Maintain RDP Connection
