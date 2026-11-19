@@ -15,9 +15,9 @@ jobs:
     env:
       RDP_USERNAME: RDP
       RDP_PASSWORD: "MR.English2008"
-      RDP_PROFILE: 'C:\Users\RDP.runnervmquqza'
-      RDP_DESKTOP: 'C:\Users\RDP.runnervmquqza\Desktop'
-      RDP_DOWNLOADS: 'C:\Users\RDP.runnervmquqza\Downloads'
+      RDP_PROFILE: 'C:\Users\RDP'
+      RDP_DESKTOP: 'C:\Users\RDP\Desktop\'
+      RDP_DOWNLOADS: 'C:\Users\RDP\Downloads'
       PCYBER_DIR: 'C:\PCYBER'
 
     steps:
