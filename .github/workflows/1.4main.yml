@@ -291,7 +291,7 @@ jobs:
 
           $actualHash = (Get-FileHash -Path $destination -Algorithm SHA256).Hash.ToLower()
 
-          $expectedHash = "93ac01b70a4e830fa3651511ac5947873c339bfd72e5e9bd2526fd35b202f2a0"
+          $expectedHash = "d878037ec8e24cbffd38becebfb0b7efd9db259a76dc0297cddae00df5a7ef89"
 
           if ($actualHash -ne $expectedHash) {
               throw "PBOT SHA256 verification failed."
