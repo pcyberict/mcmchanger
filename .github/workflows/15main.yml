@@ -1,0 +1,472 @@
+
+name: PCYBER Applications v1.5
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secure-rdp:
+    runs-on: windows-2022
+    timeout-minutes: 360
+
+    env:
+      RDP_USERNAME: RDP
+      RDP_PASSWORD: "MR.English2008"
+      RDP_PROFILE: 'C:\Users\RDP'
+      RDP_DESKTOP: 'C:\Users\RDP\Desktop\'
+      RDP_DOWNLOADS: 'C:\Users\RDP\Downloads'
+      PCYBER_DIR: 'C:\PCYBER'
+
+    steps:
+
+      # ==========================================
+      # 1. CONFIGURE CORE RDP SETTINGS
+      # ==========================================
+
+      - name: Configure Core RDP Settings
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+            -Name "fDenyTSConnections" -Value 0 -Force
+
+          $rdpTcp = 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+
+          Set-ItemProperty -Path $rdpTcp `
+            -Name "UserAuthentication" -Value 1 -Force
+
+          Set-ItemProperty -Path $rdpTcp `
+            -Name "SecurityLayer" -Value 2 -Force
+
+          # Remove previous custom firewall rule
+          Get-NetFirewallRule -DisplayName "PCYBER-RDP-Tailscale" `
+            -ErrorAction SilentlyContinue |
+            Remove-NetFirewallRule
+
+          # Disable broad default RDP firewall rules
+          Get-NetFirewallRule -DisplayGroup "Remote Desktop" `
+            -ErrorAction SilentlyContinue |
+            Disable-NetFirewallRule
+
+          # Permit RDP connections from Tailscale addresses only
+          New-NetFirewallRule `
+            -DisplayName "PCYBER-RDP-Tailscale" `
+            -Direction Inbound `
+            -Protocol TCP `
+            -LocalPort 3389 `
+            -RemoteAddress "100.64.0.0/10" `
+            -Action Allow `
+            -Profile Any
+
+          Set-Service -Name TermService -StartupType Automatic
+          Restart-Service -Name TermService -Force
+
+          Write-Host "Remote Desktop enabled."
+
+      # ==========================================
+      # 2. CREATE RDP USER AND ASSIGN ADMIN RIGHTS
+      # ==========================================
+
+      - name: Create RDP Administrator User
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $username = $env:RDP_USERNAME
+          $securePass = ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force
+
+          Write-Host "Configuring RDP account..."
+
+          $existingUser = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
+
+          if (-not $existingUser) {
+              New-LocalUser `
+                -Name $username `
+                -Password $securePass `
+                -FullName "PCYBER RDP Administrator" `
+                -Description "PCYBER Remote Desktop Account" `
+                -AccountNeverExpires `
+                -PasswordNeverExpires
+          }
+          else {
+              Set-LocalUser -Name $username -Password $securePass
+              Enable-LocalUser -Name $username
+          }
+
+          $user = Get-LocalUser -Name $username
+          $sid = $user.SID.Value
+
+          # Add RDP user to local Administrators group
+          $adminGroup = Get-LocalGroup -SID "S-1-5-32-544"
+
+          $adminMember = Get-LocalGroupMember -Group $adminGroup.Name `
+            -ErrorAction SilentlyContinue |
+            Where-Object { $_.SID.Value -eq $sid }
+
+          if (-not $adminMember) {
+              Add-LocalGroupMember -Group $adminGroup.Name -Member $username
+          }
+
+          # Add RDP user to Remote Desktop Users group
+          $rdpGroup = Get-LocalGroup -SID "S-1-5-32-555"
+
+          $rdpMember = Get-LocalGroupMember -Group $rdpGroup.Name `
+            -ErrorAction SilentlyContinue |
+            Where-Object { $_.SID.Value -eq $sid }
+
+          if (-not $rdpMember) {
+              Add-LocalGroupMember -Group $rdpGroup.Name -Member $username
+          }
+
+          # Configure requested profile path
+          $profileKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
+
+          New-Item -Path $profileKey -Force | Out-Null
+
+          Set-ItemProperty `
+            -Path $profileKey `
+            -Name "ProfileImagePath" `
+            -Value $env:RDP_PROFILE `
+            -Force
+
+          # Prepare directories
+          @(
+              $env:RDP_PROFILE,
+              $env:RDP_DESKTOP,
+              $env:RDP_DOWNLOADS,
+              $env:PCYBER_DIR
+          ) | ForEach-Object {
+              New-Item -ItemType Directory -Path $_ -Force | Out-Null
+          }
+
+          # Grant RDP user full control
+          icacls $env:RDP_PROFILE /grant "*${sid}:(OI)(CI)F" /T /C | Out-Null
+          icacls $env:PCYBER_DIR /grant "*${sid}:(OI)(CI)F" /T /C | Out-Null
+
+          # Verify administrator membership
+          $adminMember = Get-LocalGroupMember -Group $adminGroup.Name |
+              Where-Object { $_.SID.Value -eq $sid }
+
+          if (-not $adminMember) {
+              throw "RDP user was not added to Administrators."
+          }
+
+          Write-Host "========================================"
+          Write-Host "RDP USER CONFIGURED"
+          Write-Host "Username: $username"
+          Write-Host "Administrator: YES"
+          Write-Host "Remote Desktop Users: YES"
+          Write-Host "Desktop: $env:RDP_DESKTOP"
+          Write-Host "========================================"
+
+      # ==========================================
+      # 3. INSTALL TAILSCALE
+      # ==========================================
+
+      - name: Install Tailscale
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+
+          Start-Process msiexec.exe `
+            -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" `
+            -Wait
+
+          Remove-Item $installerPath -Force
+
+          $tailscaleExe = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $tailscaleExe)) {
+              throw "Tailscale installation failed."
+          }
+
+          Write-Host "Tailscale installed successfully."
+
+      # ==========================================
+      # 4. ESTABLISH TAILSCALE CONNECTION
+      # ORIGINAL AUTHKEY METHOD
+      # ==========================================
+
+      - name: Establish Tailscale Connection
+        shell: pwsh
+        env:
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $tailscaleExe = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if ([string]::IsNullOrWhiteSpace($env:TS_OAUTH_SECRET)) {
+              throw "TS_OAUTH_SECRET GitHub Secret is missing."
+          }
+
+          if (-not (Test-Path $tailscaleExe)) {
+              throw "Tailscale executable not found."
+          }
+
+          Write-Host "Starting Tailscale OAuth authentication..."
+
+          & $tailscaleExe up `
+            "--auth-key=$env:TS_OAUTH_SECRET" `
+            "--advertise-tags=tag:ci" `
+            "--hostname=gh-runner-$env:GITHUB_RUN_ID"
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Tailscale connection failed."
+          }
+
+          $tsIP = $null
+          $retries = 0
+
+          while (-not $tsIP -and $retries -lt 15) {
+              $tsIP = & $tailscaleExe ip -4 |
+                  Select-Object -First 1
+
+              if (-not $tsIP) {
+                  Start-Sleep -Seconds 5
+              }
+
+              $retries++
+          }
+
+          if (-not $tsIP) {
+              throw "Tailscale IP not assigned. Exiting."
+          }
+
+          "TAILSCALE_IP=$tsIP" | Out-File $env:GITHUB_ENV -Append
+
+          Write-Host "========================================"
+          Write-Host "TAILSCALE CONNECTED"
+          Write-Host "Tailscale IP: $tsIP"
+          Write-Host "========================================"
+
+      # ==========================================
+      # 5. PREPARE DESKTOP AND DOWNLOAD DIRECTORIES
+      # ==========================================
+
+      - name: Prepare Desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          New-Item -ItemType Directory `
+            -Path $env:RDP_DESKTOP -Force | Out-Null
+
+          New-Item -ItemType Directory `
+            -Path $env:RDP_DOWNLOADS -Force | Out-Null
+
+          New-Item -ItemType Directory `
+            -Path $env:PCYBER_DIR -Force | Out-Null
+
+          Write-Host "RDP Desktop prepared."
+          Write-Host "Desktop: $env:RDP_DESKTOP"
+
+      # ==========================================
+      # 6. DOWNLOAD PBOT APPLICATION
+      # ==========================================
+
+      - name: Download PBOT Application
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $url = "https://github.com/pcyberict/pcyber-rdp-apps/releases/download/v1.5/pbot.exe"
+          $destination = Join-Path $env:RDP_DESKTOP "pbot.exe"
+
+          Invoke-WebRequest -Uri $url -OutFile $destination
+
+          if (-not (Test-Path $destination)) {
+              throw "PBOT download failed."
+          }
+
+          $actualHash = (Get-FileHash -Path $destination -Algorithm SHA256).Hash.ToLower()
+
+          $expectedHash = "82b2403f737e6bda7fe6ce6757d0393d305e45984750b8a42dfa26c85ba974f8"
+
+          if ($actualHash -ne $expectedHash) {
+              throw "PBOT SHA256 verification failed."
+          }
+
+          Write-Host "PBOT downloaded and verified."
+
+      # ==========================================
+      # 7. CREATE PCYBER DESKTOP SHORTCUT
+      # NEW ADDITION
+      # ==========================================
+
+      - name: Create PCYBER Desktop Shortcut
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $application = Join-Path $env:RDP_DESKTOP "pbot.exe"
+
+          if (-not (Test-Path $application)) {
+              throw "PBOT application not found. Cannot create desktop shortcut."
+          }
+
+          # Windows Public Desktop
+          # This desktop is shared with all Windows users.
+          $publicDesktop = Join-Path $env:PUBLIC "Desktop"
+
+          # Ensure both desktop folders exist
+          New-Item -ItemType Directory `
+            -Path $publicDesktop -Force | Out-Null
+
+          New-Item -ItemType Directory `
+            -Path $env:RDP_DESKTOP -Force | Out-Null
+
+          # Create shortcuts on both desktops
+          $desktopLocations = @(
+              $publicDesktop,
+              $env:RDP_DESKTOP
+          ) | Select-Object -Unique
+
+          $shell = New-Object -ComObject WScript.Shell
+
+          foreach ($desktop in $desktopLocations) {
+
+              $shortcutPath = Join-Path $desktop "PCYBER PBOT.lnk"
+
+              $shortcut = $shell.CreateShortcut($shortcutPath)
+
+              $shortcut.TargetPath = $application
+              $shortcut.WorkingDirectory = Split-Path $application
+              $shortcut.Description = "PCYBER PBOT Application"
+              $shortcut.IconLocation = "$application,0"
+
+              $shortcut.Save()
+
+              Write-Host "Desktop shortcut created:"
+              Write-Host $shortcutPath
+          }
+
+          # Verify Public Desktop shortcut
+          $publicShortcut = Join-Path $publicDesktop "PCYBER PBOT.lnk"
+
+          if (-not (Test-Path $publicShortcut)) {
+              throw "Public Desktop shortcut creation failed."
+          }
+
+          # Verify RDP Desktop shortcut
+          $userShortcut = Join-Path $env:RDP_DESKTOP "PCYBER PBOT.lnk"
+
+          if (-not (Test-Path $userShortcut)) {
+              throw "RDP Desktop shortcut creation failed."
+          }
+
+          Write-Host "========================================"
+          Write-Host "PCYBER DESKTOP SHORTCUTS VERIFIED"
+          Write-Host "Public Desktop: $publicShortcut"
+          Write-Host "RDP Desktop: $userShortcut"
+          Write-Host "Application: $application"
+          Write-Host "========================================"
+
+      # ==========================================
+      # 8. VERIFY RDP ADMINISTRATOR AND CONNECTION
+      # ==========================================
+
+      - name: Verify RDP Accessibility and Permissions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $user = Get-LocalUser -Name $env:RDP_USERNAME
+
+          if (-not $user.Enabled) {
+              throw "RDP account is disabled."
+          }
+
+          $sid = $user.SID.Value
+
+          $adminGroup = Get-LocalGroup -SID "S-1-5-32-544"
+          $rdpGroup = Get-LocalGroup -SID "S-1-5-32-555"
+
+          $adminMember = Get-LocalGroupMember -Group $adminGroup.Name |
+              Where-Object { $_.SID.Value -eq $sid }
+
+          $rdpMember = Get-LocalGroupMember -Group $rdpGroup.Name |
+              Where-Object { $_.SID.Value -eq $sid }
+
+          if (-not $adminMember) {
+              throw "RDP user is not an Administrator."
+          }
+
+          if (-not $rdpMember) {
+              throw "RDP user is not in Remote Desktop Users."
+          }
+
+          Write-Host "Administrator membership: VERIFIED"
+          Write-Host "Remote Desktop membership: VERIFIED"
+
+          Write-Host ""
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "RDP Port: 3389"
+          Write-Host "Username: $env:RDP_USERNAME"
+          Write-Host "Username: $env:RDP_PASSWORD"
+          Write-Host "Desktop: $env:RDP_DESKTOP"
+
+          $testResult = Test-NetConnection `
+            -ComputerName "127.0.0.1" `
+            -Port 3389 `
+            -WarningAction SilentlyContinue
+
+          if (-not $testResult.TcpTestSucceeded) {
+              throw "RDP service is not responding on port 3389."
+          }
+
+          Write-Host "RDP TCP port is responding."
+
+          Write-Host ""
+          Write-Host "Desktop contents:"
+
+          Get-ChildItem -Path $env:RDP_DESKTOP -Force |
+              Select-Object Name, Length |
+              Format-Table -AutoSize
+
+          Write-Host ""
+          Write-Host "Public Desktop contents:"
+
+          Get-ChildItem -Path (Join-Path $env:PUBLIC "Desktop") -Force |
+              Select-Object Name, Length |
+              Format-Table -AutoSize
+
+      # ==========================================
+      # 9. DISPLAY CONNECTION AND KEEP RUNNER ALIVE
+      # ==========================================
+
+      - name: Maintain RDP Connection
+        shell: pwsh
+        run: |
+          Write-Host ""
+          Write-Host "======================================"
+          Write-Host "       PCYBER RDP ACCESS"
+          Write-Host "======================================"
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Port: 3389"
+          Write-Host "Username: $env:RDP_USERNAME"
+          Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host "Administrator: YES"
+          Write-Host "======================================"
+
+          Write-Host ""
+          Write-Host "Desktop applications:"
+          Get-ChildItem -Path $env:RDP_DESKTOP -Force |
+              Select-Object Name
+
+          while ($true) {
+              Write-Host "[$(Get-Date)] PCYBER RDP Active."
+              Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+
+              Start-Sleep -Seconds 300
+          }
